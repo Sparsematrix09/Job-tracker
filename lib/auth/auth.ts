@@ -1,15 +1,16 @@
 import { betterAuth } from "better-auth";
 import { mongodbAdapter } from "better-auth/adapters/mongodb";
 import { headers } from "next/headers";
-import { redirect } from "next/navigation";
 import { initializeUserBoard } from "../init-user-board";
 import connectDB from "../db";
 
-// IMPORTANT: Skip database connection during build
+// Helper to check if we're in build phase
+const isBuildPhase = process.env.NEXT_PHASE === 'phase-production-build';
+
+// Initialize auth conditionally
 let auth: any;
 
-// Only initialize auth if we're not in build phase
-if (process.env.NEXT_PHASE !== 'phase-production-build' && process.env.NODE_ENV !== 'test') {
+if (!isBuildPhase && process.env.NODE_ENV !== 'test') {
   try {
     const mongooseInstance = await connectDB();
     const client = mongooseInstance.connection.getClient();
@@ -41,21 +42,22 @@ if (process.env.NEXT_PHASE !== 'phase-production-build' && process.env.NODE_ENV 
       },
     });
   } catch (error) {
-    console.error("Failed to initialize auth during build:", error);
-    // Create a mock auth object for build
-    auth = {
-      api: {
-        getSession: async () => ({ user: null, session: null }),
-        signOut: async () => ({ success: false })
-      }
-    };
+    console.error("Auth initialization error:", error);
+    auth = createMockAuth();
   }
 } else {
-  // Create a mock auth object for build time
-  auth = {
+  auth = createMockAuth();
+}
+
+function createMockAuth() {
+  return {
     api: {
-      getSession: async () => ({ user: null, session: null }),
-      signOut: async () => ({ success: false })
+      getSession: async () => ({ 
+        user: null, 
+        session: null,
+        success: true 
+      }),
+      signOut: async () => ({ success: true })
     }
   };
 }
@@ -63,9 +65,8 @@ if (process.env.NEXT_PHASE !== 'phase-production-build' && process.env.NODE_ENV 
 export { auth };
 
 export async function getSession() {
-  // Skip during build
-  if (process.env.NEXT_PHASE === 'phase-production-build') {
-    return { user: null, session: null };
+  if (isBuildPhase) {
+    return { user: null, session: null, success: true };
   }
 
   try {
@@ -75,15 +76,14 @@ export async function getSession() {
     return result;
   } catch (error) {
     console.error("Session error:", error);
-    return { user: null, session: null };
+    return { user: null, session: null, success: false };
   }
 }
 
+// IMPORTANT: Don't call redirect() during build
 export async function signOut() {
-  // Skip during build
-  if (process.env.NEXT_PHASE === 'phase-production-build') {
-    redirect("/");
-    return;
+  if (isBuildPhase) {
+    return { success: true, redirectUrl: "/sign-in" };
   }
 
   try {
@@ -91,11 +91,12 @@ export async function signOut() {
       headers: await headers(),
     });
 
-    if (result.success) {
-      redirect("/sign-in");
-    }
+    return { 
+      success: result.success, 
+      redirectUrl: result.success ? "/sign-in" : null 
+    };
   } catch (error) {
     console.error("Sign out error:", error);
-    redirect("/");
+    return { success: false, redirectUrl: null };
   }
 }
